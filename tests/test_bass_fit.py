@@ -1,20 +1,25 @@
-import pyBASS as pb
 import numpy as np
+
+import pyBASS as pb
+
 from .util import rootmeansqerror
+
 
 def test_bass_fit():
     # Friedman function (Friedman, 1991, Multivariate Adaptive Regression Splines)
     def f(x):
         return (
-            10. * np.sin(np.pi * x[:, 0] * x[:, 1]) + 20. * 
-            (x[:, 2] - .5) ** 2 + 10 * x[:, 3] + 5. * x[:, 4]
+            10.0 * np.sin(np.pi * x[:, 0] * x[:, 1])
+            + 20.0 * (x[:, 2] - 0.5) ** 2
+            + 10 * x[:, 3]
+            + 5.0 * x[:, 4]
         )
 
     # Set random seed for reproducibility.
     np.random.seed(0)
 
     # Generate data.
-    n = 500  # sample size
+    n = 1000  # sample size
     p = 10  # number of predictors (only 5 are used)
     x = np.random.rand(n, p)  # predictors (training set)
     y = np.random.normal(f(x), 0.1)  # response (training set) with noise.

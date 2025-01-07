@@ -1,33 +1,60 @@
+[build-system]
+requires = ["setuptools>=74.1"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pyBASS"
 version = "0.3.2"
 description = "Bayesian Adaptive Spline Surfaces"
 authors = [
     {name = "Devin Francom", email = "dfrancom@lanl.gov"},
-    {name = "Arthur Lui", email = "luiarthur@gmail.com"},
-	{name = "J. Derek Tucker", email = "jdtuck@sandia.gov"}
+    {name = "Arthur Lui", email = "alui@lanl.gov"},
+    {name = "J. Derek Tucker", email = "jdtuck@sandia.gov"}
 ]
 license = {text = "BSD 3-Clause"}
 readme = "README.md"
-requires-python = ">=3.6"
-
+requires-python = ">=3.10"
 keywords = ["emulator"]
-
-dependencies=[
-        "numpy",
-        "matplotlib",
-        "scipy",
-]
-
 classifiers = [
     'License :: OSI Approved :: BSD License',
     'Operating System :: OS Independent',
     'Programming Language :: Python',
     'Topic :: Scientific/Engineering',
     'Topic :: Scientific/Engineering :: Mathematics',
-    'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+]
+dependencies = [
+    "matplotlib>=3.10.0",
+    "numpy>=1.22",
+    "scipy>=1.8.1",
 ]
 
 [project.urls]
 repository = "http://www.github.com/lanl/pyBASS"
+
+[tool.ruff]
+line-length = 80
+
+[tool.ruff.lint]
+ignore = ["D100"]
+extend-select = ["I", "D", "W505"]
+extend-unsafe-fixes = ["F401"]
+pydocstyle.convention = "numpy"
+pycodestyle.max-doc-length = 80
+
+# Ignore test file documentation linting.
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = ["D"]
+"examples/**/*.ipynb" = ["D"]
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.10.0",
+    "notebook>=7.3.2",
+    "pandas>=2.2.3",
+    "pytest>=8.3.4",
+    "seaborn>=0.13.2",
+]

@@ -1,55 +1,60 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Copyright 2020. Triad National Security, LLC. All rights reserved.  This 
-program was produced under U.S. Government contract 89233218CNA000001 for 
-Los Alamos National Laboratory (LANL), which is operated by Triad National 
-Security, LLC for the U.S.  Department of Energy/National Nuclear Security 
-Administration. All rights in the program are reserved by Triad National 
-
-Security, LLC, and the U.S. Department of Energy/National Nuclear Security 
-Administration. The Government is granted for itself and others acting on 
-its behalf a nonexclusive, paid-up, irrevocable worldwide license in this 
-material to reproduce, prepare derivative works, distribute copies to the 
-public, perform publicly and display publicly,and to permit others to do so.
+Copyright 2020. Triad National Security, LLC. All rights reserved.  This program
+was produced under U.S. Government contract 89233218CNA000001 for Los Alamos
+National Laboratory (LANL), which is operated by Triad National Security, LLC
+for the U.S.  Department of Energy/National Nuclear Security Administration. All
+rights in the program are reserved by Triad National Security, LLC, and the U.S.
+Department of Energy/National Nuclear Security Administration. The Government is
+granted for itself and others acting on its behalf a nonexclusive, paid-up,
+irrevocable worldwide license in this material to reproduce, prepare derivative
+works, distribute copies to the public, perform publicly and display
+publicly,and to permit others to do so.
 
 LANL software release C19112
 Author: Devin Francom
-"""
+"""  # noqa: D205
 
+from dataclasses import dataclass
+from enum import Enum, auto
+from multiprocessing import Pool
+from time import perf_counter
+
+import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sp
-import matplotlib.pyplot as plt
+from numpy.typing import NDArray
+
 import pyBASS.utils as uf
-from collections import namedtuple
-from multiprocessing import Pool
-import time
 
 
+class Moves(Enum):
+    """Possible RJMCMC moves."""
+
+    BIRTH = auto()
+    DEATH = auto()
+    CHANGE = auto()
+
+
+@dataclass
 class BassPrior:
-    """Structure to store prior"""
+    """Structure to store prior."""
 
-    def __init__(
-        self, maxInt, maxBasis, npart, g1, g2, s2_lower, h1, h2, a_tau, b_tau, 
-        w1, w2
-    ):
-        self.maxInt = maxInt
-        self.maxBasis = maxBasis
-        self.npart = npart
-        self.g1 = g1
-        self.g2 = g2
-        self.s2_lower = s2_lower
-        self.h1 = h1
-        self.h2 = h2
-        self.a_tau = a_tau
-        self.b_tau = b_tau
-        self.w1 = w1
-        self.w2 = w2
-        return
+    maxInt: int
+    maxBasis: int
+    npart: float | int
+    g1: float
+    g2: float
+    s2_lower: float
+    h1: float
+    h2: float
+    a_tau: float
+    b_tau: float
+    w1: float
+    w2: float
 
 
 class BassData:
-    """Structure to store data"""
+    """Structure to store data."""
 
     def __init__(self, xx, y):
         self.xx_orig = xx
@@ -58,21 +63,29 @@ class BassData:
         self.n, self.p = xx.shape
         self.bounds = np.column_stack([xx.min(0), xx.max(0)])
         self.xx = uf.normalize(self.xx_orig, self.bounds)
-        return
 
 
-Samples = namedtuple(
-    "Samples", "s2 lam tau nbasis nbasis_models n_int signs vs knots beta"
-)
-Sample = namedtuple(
-    "Sample", "s2 lam tau nbasis nbasis_models n_int signs vs knots beta"
-)
+@dataclass
+class Samples:
+    """MCMC Samples."""
+
+    s2: NDArray[np.float64]
+    lam: NDArray[np.float64]
+    tau: NDArray[np.float64]
+    nbasis: NDArray[np.int16]
+    nbasis_models: NDArray[np.int16]
+    n_int: NDArray[np.int8]
+    signs: NDArray[np.int8]
+    vs: NDArray[np.float64]
+    knots: NDArray[np.float64]
+    beta: NDArray[np.float64]
 
 
 class BassState:
-    """
-    The current state of the RJMCMC chain, with methods for getting the log 
-    posterior and for updating the state
+    """Bass state within the MCMC.
+
+    The current state of the RJMCMC chain, with methods for getting the log
+    posterior and for updating the state.
     """
 
     def __init__(self, data, prior):
@@ -84,9 +97,9 @@ class BassState:
         self.s2_rate = 1.0
         self.R = 1
         self.lam = 1
-        self.I_star = np.ones(prior.maxInt) * prior.w1
+        self.I_star = np.full(prior.maxInt, prior.w1)
         self.I_vec = self.I_star / np.sum(self.I_star)
-        self.z_star = np.ones(data.p) * prior.w2
+        self.z_star = np.full(data.p, prior.w2)
         self.z_vec = self.z_star / np.sum(self.z_star)
         self.basis = np.ones([data.n, 1])
         self.nc = 1
@@ -100,7 +113,9 @@ class BassState:
         self.Xty[0] = np.sum(data.y)
         self.XtX = np.zeros([prior.maxBasis + 2, prior.maxBasis + 2])
         self.XtX[0, 0] = data.n
-        self.R = np.array([[np.sqrt(data.n)]])  # np.linalg.cholesky(self.XtX[0, 0])
+        self.R = np.array(
+            [[np.sqrt(data.n)]]
+        )  # np.linalg.cholesky(self.XtX[0, 0])
         self.R_inv_t = np.array([[1 / np.sqrt(data.n)]])
         self.bhat = np.mean(data.y)
         self.qf = pow(np.sqrt(data.n) * np.mean(data.y), 2)
@@ -108,9 +123,9 @@ class BassState:
         self.cmod = False  # has the state changed since the last write (i.e., has a birth, death, or change been accepted)?
         return
 
-    def log_post(self):  # needs updating
-        """get current log posterior"""
-        lp = (
+    def log_post(self) -> None:  # needs updating
+        """Update current log posterior."""
+        self.lp = (
             -(self.s2_rate + self.prior.g2) / self.s2
             - (self.data.n / 2 + 1 + (self.nbasis + 1) / 2 + self.prior.g1)
             * np.log(self.s2)
@@ -122,56 +137,36 @@ class BassState:
             - self.lam * (self.prior.h2 + 1)
         )  # curr$nbasis-1 because poisson prior is excluding intercept (for curr$nbasis instead of curr$nbasis+1)
         # -lfactorial(curr$nbasis) # added, but maybe cancels with prior
-        self.lp = lp
-        return
 
-    def update(self):
-        """
-        Update the current state using a RJMCMC step (and Gibbs steps at 
-        the end of this function)
-        """
+    def birth_step(self) -> None:
+        cand = uf.genCandBasis(
+            self.prior.maxInt,
+            self.I_vec,
+            self.z_vec,
+            self.data.p,
+            self.data.xx,
+        )
 
-        move_type = np.random.choice([1, 2, 3])
+        # if proposed basis function has too few non-zero entries,
+        # dont change the state
+        if (cand.basis > 0).sum() < self.prior.npart:
+            return
 
-        if self.nbasis == 0:
-            move_type = 1
+        ata = np.dot(cand.basis, cand.basis)
+        Xta = np.dot(self.basis.T, cand.basis)
+        aty = np.dot(cand.basis, self.data.y)
 
-        if self.nbasis == self.prior.maxBasis:
-            move_type = np.random.choice(np.array([2, 3]))
+        self.Xty[self.nc] = aty
+        self.XtX[0 : self.nc, self.nc] = Xta
+        self.XtX[self.nc, 0 : (self.nc)] = Xta
+        self.XtX[self.nc, self.nc] = ata
 
-        if move_type == 1:
-            # BIRTH step
+        qf_cand = uf.getQf(
+            self.XtX[0 : (self.nc + 1), 0 : (self.nc + 1)],
+            self.Xty[0 : (self.nc + 1)],
+        )
 
-            cand = uf.genCandBasis(
-                self.prior.maxInt, self.I_vec, self.z_vec, self.data.p, 
-                self.data.xx
-            )
-
-            # if proposed basis function has too few non-zero entries, 
-            # dont change the state
-            if (
-                cand.basis > 0
-            ).sum() < self.prior.npart:  
-                return
-
-            ata = np.dot(cand.basis, cand.basis)
-            Xta = np.dot(self.basis.T, cand.basis)
-            aty = np.dot(cand.basis, self.data.y)
-
-            self.Xty[self.nc] = aty
-            self.XtX[0 : self.nc, self.nc] = Xta
-            self.XtX[self.nc, 0 : (self.nc)] = Xta
-            self.XtX[self.nc, self.nc] = ata
-
-            qf_cand = uf.getQf(
-                self.XtX[0: (self.nc + 1), 0: (self.nc + 1)],
-                self.Xty[0: (self.nc + 1)],
-            )
-
-            fullRank = qf_cand is not None
-            if not fullRank:
-                return
-
+        if qf_cand is not None:  # full rank.
             alpha = (
                 0.5 / self.s2 * (qf_cand.qf - self.qf) / (1 + self.tau)
                 + np.log(self.lam)
@@ -191,13 +186,14 @@ class BassState:
                 self.qf = qf_cand.qf
                 self.bhat = qf_cand.bhat
                 self.R = qf_cand.R
-                self.R_inv_t = sp.linalg.solve_triangular(self.R, 
-                                                          np.identity(self.nc))
+                self.R_inv_t = sp.linalg.solve_triangular(
+                    self.R, np.identity(self.nc)
+                )
                 self.count[0] = self.count[0] + 1
                 self.n_int[self.nbasis - 1] = cand.n_int
-                self.knots[self.nbasis - 1, 0: (cand.n_int)] = cand.knots
-                self.signs[self.nbasis - 1, 0: (cand.n_int)] = cand.signs
-                self.vs[self.nbasis - 1, 0: (cand.n_int)] = cand.vs
+                self.knots[self.nbasis - 1, 0 : (cand.n_int)] = cand.knots
+                self.signs[self.nbasis - 1, 0 : (cand.n_int)] = cand.signs
+                self.vs[self.nbasis - 1, 0 : (cand.n_int)] = cand.vs
 
                 self.I_star[cand.n_int - 1] = self.I_star[cand.n_int - 1] + 1
                 self.I_vec = self.I_star / sum(self.I_star)
@@ -205,35 +201,29 @@ class BassState:
                 self.z_vec = self.z_star / sum(self.z_star)
 
                 self.basis = np.append(
-                    self.basis, cand.basis.reshape(self.data.n, 1), axis=1
+                    self.basis,
+                    cand.basis.reshape(self.data.n, 1),
+                    axis=1,
                 )
 
-        elif move_type == 2:
-            # DEATH step
+    def death_step(self) -> None:
+        tokill_ind = np.random.choice(self.nbasis)
+        ind = list(range(self.nc))
+        del ind[tokill_ind + 1]
 
-            tokill_ind = np.random.choice(self.nbasis)
-            ind = list(range(self.nc))
-            del ind[tokill_ind + 1]
+        qf_cand = uf.getQf(self.XtX[np.ix_(ind, ind)], self.Xty[ind])
 
-            qf_cand = uf.getQf(self.XtX[np.ix_(ind, ind)], self.Xty[ind])
-
-            fullRank = qf_cand is not None
-            if not fullRank:
-                return
-
+        if qf_cand is not None:  # i.e., qf_cand is full rank.
             I_star = self.I_star.copy()
-            I_star[self.n_int[tokill_ind] - 1] = I_star[self.n_int[tokill_ind] - 1] - 1
+            I_star[self.n_int[tokill_ind] - 1] -= 1
             I_vec = I_star / sum(I_star)
             z_star = self.z_star.copy()
-            z_star[self.vs[tokill_ind, 0: self.n_int[tokill_ind]]] = (
-                z_star[self.vs[tokill_ind, 0: self.n_int[tokill_ind]]] - 1
-            )
-
+            z_star[self.vs[tokill_ind, : self.n_int[tokill_ind]]] -= 1
             z_vec = z_star / sum(z_star)
 
             lbmcmp = uf.logProbChangeMod(
                 self.n_int[tokill_ind],
-                self.vs[tokill_ind, 0: self.n_int[tokill_ind]],
+                self.vs[tokill_ind, : self.n_int[tokill_ind]],
                 I_vec,
                 z_vec,
                 self.data.p,
@@ -258,32 +248,33 @@ class BassState:
                 self.qf = qf_cand.qf
                 self.bhat = qf_cand.bhat
                 self.R = qf_cand.R
-                self.R_inv_t = sp.linalg.solve_triangular(self.R, 
-                                                          np.identity(self.nc))
+                self.R_inv_t = sp.linalg.solve_triangular(
+                    self.R, np.identity(self.nc)
+                )
                 self.count[1] = self.count[1] + 1
 
-                self.Xty[0: self.nc] = self.Xty[ind]
-                self.XtX[0: self.nc, 0: self.nc] = self.XtX[np.ix_(ind, ind)]
+                self.Xty[: self.nc] = self.Xty[ind]
+                self.XtX[: self.nc, : self.nc] = self.XtX[np.ix_(ind, ind)]
 
-                temp = self.n_int[0: (self.nbasis + 1)]
+                temp = self.n_int[: (self.nbasis + 1)]
                 temp = np.delete(temp, tokill_ind)
                 self.n_int = self.n_int * 0
-                self.n_int[0: (self.nbasis)] = temp[:]
+                self.n_int[: self.nbasis] = temp[:]
 
-                temp = self.knots[0: (self.nbasis + 1), :]
+                temp = self.knots[: (self.nbasis + 1), :]
                 temp = np.delete(temp, tokill_ind, 0)
-                self.knots = self.knots * 0
-                self.knots[0: (self.nbasis), :] = temp[:]
+                self.knots *= 0
+                self.knots[: self.nbasis, :] = temp[:]
 
-                temp = self.signs[0: (self.nbasis + 1), :]
+                temp = self.signs[: (self.nbasis + 1), :]
                 temp = np.delete(temp, tokill_ind, 0)
-                self.signs = self.signs * 0
-                self.signs[0: (self.nbasis), :] = temp[:]
+                self.signs *= 0
+                self.signs[: self.nbasis, :] = temp[:]
 
-                temp = self.vs[0: (self.nbasis + 1), :]
+                temp = self.vs[: (self.nbasis + 1), :]
                 temp = np.delete(temp, tokill_ind, 0)
-                self.vs = self.vs * 0
-                self.vs[0: (self.nbasis), :] = temp[:]
+                self.vs *= 0
+                self.vs[: self.nbasis, :] = temp[:]
 
                 self.I_star = I_star[:]
                 self.I_vec = I_vec[:]
@@ -292,46 +283,39 @@ class BassState:
 
                 self.basis = np.delete(self.basis, tokill_ind + 1, 1)
 
-        else:
-            # CHANGE step
+    def change_step(self) -> None:
+        tochange_basis = np.random.choice(self.nbasis)
+        tochange_int = np.random.choice(self.n_int[tochange_basis])
 
-            tochange_basis = np.random.choice(self.nbasis)
-            tochange_int = np.random.choice(self.n_int[tochange_basis])
+        cand = uf.genBasisChange(
+            self.knots[tochange_basis, : self.n_int[tochange_basis]],
+            self.signs[tochange_basis, : self.n_int[tochange_basis]],
+            self.vs[tochange_basis, : self.n_int[tochange_basis]],
+            tochange_int,
+            self.data.xx,
+        )
 
-            cand = uf.genBasisChange(
-                self.knots[tochange_basis, 0: self.n_int[tochange_basis]],
-                self.signs[tochange_basis, 0: self.n_int[tochange_basis]],
-                self.vs[tochange_basis, 0: self.n_int[tochange_basis]],
-                tochange_int,
-                self.data.xx,
-            )
+        # if proposed basis function has too few non-zero entries,
+        # dont change the state
+        if (cand.basis > 0).sum() < self.prior.npart:
+            return
 
-            # if proposed basis function has too few non-zero entries, 
-            # dont change the state
-            if (
-                cand.basis > 0
-            ).sum() < self.prior.npart:  
-                return
+        ata = cand.basis.T @ cand.basis
+        Xta = (self.basis.T @ cand.basis).reshape(self.nc)
+        aty = cand.basis.T @ self.data.y
 
-            ata = np.dot(cand.basis.T, cand.basis)
-            Xta = np.dot(self.basis.T, cand.basis).reshape(self.nc)
-            aty = np.dot(cand.basis.T, self.data.y)
+        ind = list(range(self.nc))
+        XtX_cand = self.XtX[np.ix_(ind, ind)].copy()
+        XtX_cand[tochange_basis + 1, :] = Xta
+        XtX_cand[:, tochange_basis + 1] = Xta
+        XtX_cand[tochange_basis + 1, tochange_basis + 1] = ata
 
-            ind = list(range(self.nc))
-            XtX_cand = self.XtX[np.ix_(ind, ind)].copy()
-            XtX_cand[tochange_basis + 1, :] = Xta
-            XtX_cand[:, tochange_basis + 1] = Xta
-            XtX_cand[tochange_basis + 1, tochange_basis + 1] = ata
+        Xty_cand = self.Xty[: self.nc].copy()
+        Xty_cand[tochange_basis + 1] = aty
 
-            Xty_cand = self.Xty[0: self.nc].copy()
-            Xty_cand[tochange_basis + 1] = aty
+        qf_cand = uf.getQf(XtX_cand, Xty_cand)
 
-            qf_cand = uf.getQf(XtX_cand, Xty_cand)
-
-            fullRank = qf_cand is not None
-            if not fullRank:
-                return
-
+        if qf_cand is not None:  # i.e., qf_cand is full_rank.
             alpha = 0.5 / self.s2 * (qf_cand.qf - self.qf) / (1 + self.tau)
 
             if np.log(np.random.rand()) < alpha:
@@ -342,52 +326,86 @@ class BassState:
                 self.R_inv_t = sp.linalg.solve_triangular(
                     self.R, np.identity(self.nc)
                 )  # check this
-                self.count[2] = self.count[2] + 1
+                self.count[2] += 1
 
-                self.Xty[0: self.nc] = Xty_cand
-                self.XtX[0: self.nc, 0: self.nc] = XtX_cand
+                self.Xty[: self.nc] = Xty_cand
+                self.XtX[: self.nc, : self.nc] = XtX_cand
 
-                self.knots[tochange_basis, 0: self.n_int[tochange_basis]] = cand.knots
-                self.signs[tochange_basis, 0: self.n_int[tochange_basis]] = cand.signs
+                self.knots[tochange_basis, : self.n_int[tochange_basis]] = (
+                    cand.knots
+                )
+                self.signs[tochange_basis, : self.n_int[tochange_basis]] = (
+                    cand.signs
+                )
 
-                self.basis[:, tochange_basis + 1] = cand.basis.reshape(self.data.n)
+                self.basis[:, tochange_basis + 1] = cand.basis.reshape(
+                    self.data.n
+                )
 
+    def update(self) -> None:
+        """Update current state.
+
+        Update the current state using a RJMCMC step (and Gibbs steps at the end
+        of this function).
+        """
+        if self.nbasis == 0:
+            move_type = Moves.BIRTH
+        elif self.nbasis == self.prior.maxBasis:
+            move_type = np.random.choice([Moves.DEATH, Moves.CHANGE])  # type: ignore
+        else:
+            move_type = np.random.choice(Moves)  # type: ignore
+
+        match move_type:
+            case Moves.BIRTH:
+                self.birth_step()
+            case Moves.DEATH:
+                self.death_step()
+            case Moves.CHANGE:
+                self.change_step()
+                # CHANGE step
+            case _:
+                raise ValueError(f"move_type {move_type} is not allowed!")
+
+        # Update s2 by sampling from inverse gamma full conditional.
         a_s2 = self.prior.g1 + self.data.n / 2
-        b_s2 = self.prior.g2 + 0.5 * (
-            self.data.ssy - np.dot(self.bhat.T, self.Xty[0 : self.nc]) / (1 + self.tau)
-        )
-        if b_s2 < 0:
-            self.prior.g2 = self.prior.g2 + 1.0e-10
-            b_s2 = self.prior.g2 + 0.5 * (
+        b_s2 = self.prior.g2 + max(
+            1e-10,
+            0.5
+            * (
                 self.data.ssy
                 - np.dot(self.bhat.T, self.Xty[0 : self.nc]) / (1 + self.tau)
-            )
-        self.s2 = 1 / np.random.gamma(a_s2, 1 / b_s2, size=1)
+            ),
+        )
+        self.s2 = 1 / np.random.gamma(a_s2, 1 / b_s2)
 
-        self.beta = self.bhat / (1 + self.tau) + np.dot(
-            self.R_inv_t, np.random.normal(size=self.nc)
+        # Update beta by sampling from MvNormal full conditional.
+        self.beta = self.bhat / (1 + self.tau) + (
+            self.R_inv_t @ np.random.randn(self.nc)
         ) * np.sqrt(self.s2 / (1 + self.tau))
 
+        # Update lambda by sampling from gamma full conditional.
         a_lam = self.prior.h1 + self.nbasis
         b_lam = self.prior.h2 + 1
-        self.lam = np.random.gamma(a_lam, 1 / b_lam, size=1)
+        self.lam = np.random.gamma(a_lam, 1 / b_lam)
 
+        # Update tau by sampling from gamma full conditional.
         temp = np.dot(self.R, self.beta)
         qf2 = np.dot(temp, temp)
         a_tau = self.prior.a_tau + (self.nbasis + 1) / 2
         b_tau = self.prior.b_tau + 0.5 * qf2 / self.s2
-        self.tau = np.random.gamma(a_tau, 1 / b_tau, size=1)
+        self.tau = np.random.gamma(a_tau, 1 / b_tau)
 
 
 class BassModel:
-    """
-    The model structure, including the current RJMCMC state and previous 
+    """Bass model structure.
+
+    The model structure, including the current RJMCMC state and previous
     saved states; with methods for saving the
     state, plotting MCMC traces, and predicting
     """
 
     def __init__(self, data, prior, nstore):
-        """Get starting state, build storage structures"""
+        """Get starting state, build storage structures."""
         self.data = data
         self.prior = prior
         self.state = BassState(self.data, self.prior)
@@ -398,61 +416,71 @@ class BassModel:
         nbasis = np.zeros(nstore, dtype=int)
         nbasis_models = np.zeros(nstore, dtype=int)
         n_int = np.zeros([nstore, self.prior.maxBasis], dtype=int)
-        signs = np.zeros([nstore, self.prior.maxBasis, self.prior.maxInt], 
-                         dtype=int)
-        vs = np.zeros([nstore, self.prior.maxBasis, self.prior.maxInt], 
-                      dtype=int)
+        signs = np.zeros(
+            [nstore, self.prior.maxBasis, self.prior.maxInt], dtype=int
+        )
+        vs = np.zeros(
+            [nstore, self.prior.maxBasis, self.prior.maxInt], dtype=int
+        )
         knots = np.zeros([nstore, self.prior.maxBasis, self.prior.maxInt])
         beta = np.zeros([nstore, self.prior.maxBasis + 1])
         self.samples = Samples(
-            s2, lam, tau, nbasis, nbasis_models, n_int, signs, vs, knots, beta
+            s2=s2,
+            lam=lam,
+            tau=tau,
+            nbasis=nbasis,
+            nbasis_models=nbasis_models,
+            n_int=n_int,
+            signs=signs,
+            vs=vs,
+            knots=knots,
+            beta=beta,
         )
         self.k = 0
         self.k_mod = -1
         self.model_lookup = np.zeros(nstore, dtype=int)
-        return
 
     def writeState(self):
-        """
-        Take relevant parts of state and write to storage (only manipulates 
+        """Write state.
+
+        Take relevant parts of state and write to storage (only manipulates
         storage vectors created in init)
         """
-        
         self.samples.s2[self.k] = self.state.s2
         self.samples.lam[self.k] = self.state.lam
         self.samples.tau[self.k] = self.state.tau
-        self.samples.beta[self.k, 0: (self.state.nbasis + 1)] = self.state.beta
+        self.samples.beta[self.k, : (self.state.nbasis + 1)] = self.state.beta
         self.samples.nbasis[self.k] = self.state.nbasis
 
         if self.state.cmod:  # basis part of state was changed
-            self.k_mod = self.k_mod + 1
+            self.k_mod += 1
             self.samples.nbasis_models[self.k_mod] = self.state.nbasis
-            self.samples.n_int[self.k_mod, 0: self.state.nbasis] = self.state.n_int[
-                0: self.state.nbasis
+            self.samples.n_int[self.k_mod, : self.state.nbasis] = (
+                self.state.n_int[: self.state.nbasis]
+            )
+            self.samples.signs[self.k_mod, : self.state.nbasis, :] = (
+                self.state.signs[: self.state.nbasis, :]
+            )
+            self.samples.vs[self.k_mod, : self.state.nbasis, :] = self.state.vs[
+                : self.state.nbasis, :
             ]
-            self.samples.signs[self.k_mod, 0: self.state.nbasis, :] = self.state.signs[
-                0: self.state.nbasis, :
-            ]
-            self.samples.vs[self.k_mod, 0: self.state.nbasis, :] = self.state.vs[
-                0: self.state.nbasis, :
-            ]
-            self.samples.knots[self.k_mod, 0: self.state.nbasis, :] = self.state.knots[
-                0: self.state.nbasis, :
-            ]
+            self.samples.knots[self.k_mod, : self.state.nbasis, :] = (
+                self.state.knots[: self.state.nbasis, :]
+            )
             self.state.cmod = False
 
         self.model_lookup[self.k] = self.k_mod
-        self.k = self.k + 1
+        self.k += 1
 
     def plot(self):
         """
-        Trace plots and predictions/residuals
+        Trace plots and predictions/residuals.
 
-        * top left - trace plot of number of basis functions 
+        * top left - trace plot of number of basis functions
                      (excluding burn-in and thinning)
         * top right - trace plot of residual variance
         * bottom left - training data against predictions
-        * bottom right - histogram of residuals (posterior mean) with 
+        * bottom right - histogram of residuals (posterior mean) with
                          assumed Gaussian overlaid.
         """
         fig = plt.figure()
@@ -469,7 +497,7 @@ class BassModel:
 
         ax = fig.add_subplot(2, 2, 3)
         # posterior predictive mean
-        yhat = self.predict(self.data.xx_orig).mean(axis=0)  
+        yhat = self.predict(self.data.xx_orig).mean(axis=0)
         plt.scatter(self.data.y, yhat)
         uf.abline(1, 0)
         plt.xlabel("observed")
@@ -480,8 +508,9 @@ class BassModel:
         axes = plt.gca()
         x = np.linspace(axes.get_xlim()[0], axes.get_xlim()[1], 100)
         plt.plot(
-            x, sp.stats.norm.pdf(x, scale=np.sqrt(self.samples.s2.mean())), 
-            color="red"
+            x,
+            sp.stats.norm.pdf(x, scale=np.sqrt(self.samples.s2.mean())),
+            color="red",
         )
         plt.xlabel("residuals")
         plt.ylabel("density")
@@ -491,14 +520,14 @@ class BassModel:
         plt.show()
 
     def makeBasisMatrix(self, model_ind, X):
-        """Make basis matrix for model"""
+        """Make basis matrix for model."""
         nb = self.samples.nbasis_models[model_ind]
 
         n = len(X)
         mat = np.zeros([n, nb + 1])
         mat[:, 0] = 1
         for m in range(nb):
-            ind = list(range(self.samples.n_int[model_ind, m]))
+            ind = np.arange(self.samples.n_int[model_ind, m])
             mat[:, m + 1] = uf.makeBasis(
                 self.samples.signs[model_ind, m, ind],
                 self.samples.vs[model_ind, m, ind],
@@ -511,24 +540,24 @@ class BassModel:
         """
         BASS prediction using new inputs (after training).
 
-        :param X: matrix (numpy array) of predictors with dimension nxp, where 
+        :param X: matrix (numpy array) of predictors with dimension nxp, where
                   n is the number of prediction points and
-                  p is the number of inputs (features). p must match the 
-                  number of training inputs, and the order of the columns must 
+                  p is the number of inputs (features). p must match the
+                  number of training inputs, and the order of the columns must
                   also match.
-        :param mcmc_use: which MCMC samples to use (list of integers of length 
+        :param mcmc_use: which MCMC samples to use (list of integers of length
                          m).  Defaults to all MCMC samples.
-        :param nugget: whether to use the error variance when predicting.  
+        :param nugget: whether to use the error variance when predicting.
                        If False, predictions are for mean function.
-        :return: a matrix (numpy array) of predictions with dimension mxn, 
-                 with rows corresponding to MCMC samples and columns 
+        :return: a matrix (numpy array) of predictions with dimension mxn,
+                 with rows corresponding to MCMC samples and columns
                  corresponding to prediction points.
         """
         if X.ndim == 1:
             X = X[None, :]
 
         Xs = uf.normalize(X, self.data.bounds)
-        if np.any(mcmc_use is None):
+        if mcmc_use is None:
             mcmc_use = np.array(range(self.nstore))
         out = np.zeros([len(mcmc_use), len(Xs)])
         models = self.model_lookup[mcmc_use]
@@ -538,14 +567,16 @@ class BassModel:
             mcmc_use_j = mcmc_use[np.ix_(models == j)]
             nn = len(mcmc_use_j)
             out[range(k, nn + k), :] = np.dot(
-                self.samples.beta[mcmc_use_j, 0: (self.samples.nbasis_models[j] + 1)],
+                self.samples.beta[
+                    mcmc_use_j, : (self.samples.nbasis_models[j] + 1)
+                ],
                 self.makeBasisMatrix(j, Xs).T,
             )
             k += nn
         if nugget:
             out += np.random.normal(
-                scale=np.sqrt(self.samples.s2[mcmc_use]), size=[len(Xs), 
-                                                                len(mcmc_use)]
+                scale=np.sqrt(self.samples.s2[mcmc_use]),
+                size=[len(Xs), len(mcmc_use)],
             ).T
         return out
 
@@ -571,34 +602,34 @@ def bass(
     verbose=True,
 ):
     """
-    **Bayesian Adaptive Spline Surfaces - model fitting**
+    Bayesian Adaptive Spline Surfaces - model fitting.
 
-    This function takes training data, priors, and algorithmic constants and 
-    fits a BASS model.  The result is a set of posterior samples of the model.  
-    The resulting object has a predict function to generate posterior 
-    predictive samples.  Default settings of priors and algorithmic parameters 
+    This function takes training data, priors, and algorithmic constants and
+    fits a BASS model.  The result is a set of posterior samples of the model.
+    The resulting object has a predict function to generate posterior
+    predictive samples.  Default settings of priors and algorithmic parameters
     should only be changed by users who understand the model.
 
-    :param xx: matrix (numpy array) of predictors of dimension nxp, where n is 
-               the number of training examples and p is the number of inputs 
+    :param xx: matrix (numpy array) of predictors of dimension nxp, where n is
+               the number of training examples and p is the number of inputs
                (features).
     :param y: response vector (numpy array) of length n.
     :param nmcmc: total number of MCMC iterations (integer)
-    :param nburn: number of MCMC iterations to throw away as burn-in (integer, 
+    :param nburn: number of MCMC iterations to throw away as burn-in (integer,
                   less than nmcmc).
     :param thin: number of MCMC iterations to thin (integer).
-    :param w1: nominal weight for degree of interaction, used in generating 
+    :param w1: nominal weight for degree of interaction, used in generating
                candidate basis functions. Should be greater than 0.
-    :param w2: nominal weight for variables, used in generating candidate 
+    :param w2: nominal weight for variables, used in generating candidate
                basis functions. Should be greater than 0.
-    :param maxInt: maximum degree of interaction for spline basis functions 
+    :param maxInt: maximum degree of interaction for spline basis functions
                    (integer, less than p)
-    :param maxBasis: maximum number of tensor product spline basis functions 
+    :param maxBasis: maximum number of tensor product spline basis functions
                      (integer)
-    :param npart: minimum number of non-zero points in a basis function. If 
-                  the response is functional, this refers only to the portion 
-                  of the basis function coming from the non-functional 
-                  predictors. Defaults to 20 or 0.1 times the number of 
+    :param npart: minimum number of non-zero points in a basis function. If
+                  the response is functional, this refers only to the portion
+                  of the basis function coming from the non-functional
+                  predictors. Defaults to 20 or 0.1 times the number of
                   observations, whichever is smaller.
     :param g1: shape for IG prior on residual variance.
     :param g2: scale for IG prior on residual variance.
@@ -608,11 +639,10 @@ def bass(
     :param a_tau: shape for gamma prior on 1/g in g-prior.
     :param b_tau: scale for gamma prior on 1/g in g-prior.
     :param verbose: boolean for printing progress
-    :return: an object of class BassModel, which includes predict and plot 
+    :return: an object of class BassModel, which includes predict and plot
              functions.
     """
-
-    t0 = time.time()
+    t0 = perf_counter()
     if b_tau is None:
         b_tau = len(y) / 2
     if npart is None:
@@ -629,13 +659,13 @@ def bass(
     )  # if we add tempering, bm should have as many states as temperatures
     for i in range(nmcmc):  # rjmcmc loop
         bm.state.update()
-        if i > (nburn - 1) and ((i - nburn + 1) % thin) == 0:
+        if i >= nburn and ((i - nburn + 1) % thin) == 0:
             bm.writeState()
         if verbose and i % 500 == 0:
-            print("\rBASS MCMC {:.1%} Complete".format(i / nmcmc), end="")
+            print(f"\rBASS MCMC {i / nmcmc:.1%} Complete.", end="")
             # print(str(datetime.now()) + ', nbasis: ' + str(bm.state.nbasis))
-    t1 = time.time()
-    print("\rBASS MCMC Complete. Time: {:f} seconds.".format(t1 - t0))
+    t1 = perf_counter()
+    print(f"\rBASS MCMC Complete. Time: {t1 - t0:f} seconds.")
     # del bm.writeState # the user should not have access to this
     return bm
 
@@ -680,33 +710,35 @@ class PoolBassPredict(object):
 
 
 class BassBasis:
-    """
-    Structure for functional response BASS model using a basis 
+    """Bass Basis.
+
+    Structure for functional response BASS model using a basis
     decomposition, gets a list of BASS models
     """
 
     def __init__(
         self, xx, y, basis, newy, y_mean, y_sd, trunc_error, ncores=1, **kwargs
     ):
-        """
-        Fit BASS model with multivariate/functional response by projecting 
+        """Fit BASS  model.
+
+        Fit BASS model with multivariate/functional response by projecting
         onto user specified basis.
 
-        :param xx: matrix (numpy array) of predictors of dimension nxp, where 
-                   n is the number of training examples and p is the number of 
+        :param xx: matrix (numpy array) of predictors of dimension nxp, where
+                   n is the number of training examples and p is the number of
                    inputs (features).
-        :param y: response matrix (numpy array) of dimension nxq, where q is 
+        :param y: response matrix (numpy array) of dimension nxq, where q is
                   the number of multivariate/functional responses.
         :param basis: matrix (numpy array) of basis functions of dimension qxk.
-        :param newy: matrix (numpy array) of y projected onto basis, dimension 
+        :param newy: matrix (numpy array) of y projected onto basis, dimension
                      kxn.
-        :param y_mean: vector (numpy array) of length q with the mean if y was 
+        :param y_mean: vector (numpy array) of length q with the mean if y was
                        centered before obtaining newy.
-        :param y_sd: vector (numpy array) of length q with the standard 
+        :param y_sd: vector (numpy array) of length q with the standard
                      deviation if y was scaled before obtaining newy.
-        :param trunc_error: numpy array of projection truncation errors 
+        :param trunc_error: numpy array of projection truncation errors
                             (dimension qxn)
-        :param ncores: number of threads to use when fitting independent BASS 
+        :param ncores: number of threads to use when fitting independent BASS
                        models (integer less than or equal to npc).
         :param kwargs: optional arguments to bass function.
         """
@@ -731,25 +763,26 @@ class BassBasis:
             self.bm_list = temp.fit(ncores, self.nbasis)
         return
 
-    def predict(self, X, mcmc_use=None, nugget=False, trunc_error=False, 
-                ncores=1):
+    def predict(
+        self, X, mcmc_use=None, nugget=False, trunc_error=False, ncores=1
+    ):
         """
         Predict the functional response at new inputs.
 
-        :param X: matrix (numpy array) of predictors with dimension nxp, where 
-                  n is the number of prediction points and p is the number of 
-                  inputs (features). p must match the number of training 
+        :param X: matrix (numpy array) of predictors with dimension nxp, where
+                  n is the number of prediction points and p is the number of
+                  inputs (features). p must match the number of training
                   inputs, and the order of the columns must also match.
-        :param mcmc_use: which MCMC samples to use (list of integers of length 
+        :param mcmc_use: which MCMC samples to use (list of integers of length
                          m). Defaults to all MCMC samples.
-        :param nugget: whether to use the error variance when predicting.  
+        :param nugget: whether to use the error variance when predicting.
                        If False, predictions are for mean function.
         :param trunc_error: whether to use truncation error when predicting.
-        :param ncores: number of cores to use while predicting (integer).  
+        :param ncores: number of cores to use while predicting (integer).
                        In almost all cases, use ncores=1.
-        :return: a numpy array of predictions with dimension mxnxq, with first 
-                 dimension corresponding to MCMC samples, second dimension 
-                 corresponding to prediction points, and third dimension 
+        :return: a numpy array of predictions with dimension mxnxq, with first
+                 dimension corresponding to MCMC samples, second dimension
+                 corresponding to prediction points, and third dimension
                  corresponding to multivariate/functional response.
         """
         if ncores == 1:
@@ -777,15 +810,14 @@ class BassBasis:
 
     def plot(self):
         """
-        Trace plots and predictions/residuals
+        Trace plots and predictions/residuals.
 
-        * top left - trace plot of number of basis functions 
+        * top left - trace plot of number of basis functions
           (excluding burn-in and thinning) for each BASS model
         * top right - trace plot of residual variance for each BASS model
         * bottom left - training data against predictions
         * bottom right - histogram of residuals (posterior mean).
         """
-
         fig = plt.figure()
 
         ax = fig.add_subplot(2, 2, 1)
@@ -825,20 +857,21 @@ class BassBasis:
 
 
 class BassPCAsetup:
-    """
-    Wrapper to get principal components that would be used for bassPCA.  
+    """BASS PCA Setup.
+
+    Wrapper to get principal components that would be used for bassPCA.
     Mainly used for checking how many PCs should be used.
 
     :param y: response matrix (numpy array) of dimension nxq, where n is the
-              number of training examples and q is the number of 
+              number of training examples and q is the number of
               multivariate/functional responses.
-    :param npc: number of principal components to use (integer, optional if 
+    :param npc: number of principal components to use (integer, optional if
                 percVar is specified).
-    :param percVar: percent (between 0 and 100) of variation to explain when 
+    :param percVar: percent (between 0 and 100) of variation to explain when
                     choosing number of principal components (if npc=None).
-    :param center: whether to center the responses before principal component 
+    :param center: whether to center the responses before principal component
                    decomposition (boolean).
-    :param scale: whether to scale the responses before principal component 
+    :param scale: whether to scale the responses before principal component
                   decomposition (boolean).
     :return: object with plot method.
     """
@@ -863,22 +896,20 @@ class BassPCAsetup:
         return
 
     def plot(self, npc=None, percVar=None):
-        """
-        Plot of principal components, eigenvalues
+        """Plot of principal components, eigenvalues.
 
-        * left - principal components; grey are excluded by setting of npc or 
+        * left - principal components; grey are excluded by setting of npc or
                  percVar
-        * right - eigenvalues (squared singular values), colored according to 
+        * right - eigenvalues (squared singular values), colored according to
                   principal components
         """
-
         cs = np.cumsum(self.evals) / np.sum(self.evals) * 100.0
 
-        if npc == None and percVar == 100:
+        if npc is None and percVar == 100:
             npc = len(self.evals)
-        if npc == None and percVar is not None:
+        if npc is None and percVar is not None:
             npc = np.where(cs >= percVar)[0][0] + 1
-        if npc == None or npc > len(self.evals):
+        if npc is None or npc > len(self.evals):
             npc = len(self.evals)
 
         fig = plt.figure()
@@ -913,30 +944,30 @@ class BassPCAsetup:
 def bassPCA(
     xx, y, npc=None, percVar=99.9, ncores=1, center=True, scale=False, **kwargs
 ):
-    """
-    Wrapper to get principal components and call BassBasis, which then calls 
-    bass function to fit the BASS model for functional (or multivariate) 
+    """BASS PCA wrapper.
+
+    Wrapper to get principal components and call BassBasis, which then calls
+    bass function to fit the BASS model for functional (or multivariate)
     response data.
 
-    :param xx: matrix (numpy array) of predictors of dimension nxp, where n is 
-               the number of training examples and p is the number of inputs 
+    :param xx: matrix (numpy array) of predictors of dimension nxp, where n is
+               the number of training examples and p is the number of inputs
                (features).
-    :param y: response matrix (numpy array) of dimension nxq, where q is the 
+    :param y: response matrix (numpy array) of dimension nxq, where q is the
               number of multivariate/functional responses.
-    :param npc: number of principal components to use (integer, optional if 
+    :param npc: number of principal components to use (integer, optional if
                 percVar is specified).
-    :param percVar: percent (between 0 and 100) of variation to explain when 
+    :param percVar: percent (between 0 and 100) of variation to explain when
                     choosing number of principal components(if npc=None).
     :param ncores: number of threads to use when fitting independent BASS
                    models (integer less than or equal to npc).
-    :param center: whether to center the responses before principal component 
+    :param center: whether to center the responses before principal component
                    decomposition (boolean).
-    :param scale: whether to scale the responses before principal component 
+    :param scale: whether to scale the responses before principal component
                   decomposition (boolean).
     :param kwargs: optional arguments to bass function.
     :return: object of class BassBasis, with predict and plot functions.
     """
-
     setup = BassPCAsetup(y, center, scale)
 
     if npc is None:
@@ -948,12 +979,20 @@ def bassPCA(
 
     basis = setup.basis[:, :npc]
     newy = setup.newy[:npc, :]
-    trunc_error = np.dot(basis, newy) - setup.y_scale.T
+    trunc_error = basis @ newy - setup.y_scale.T
 
     print(
-        "\rStarting bassPCA with {:d} components, using {:d} cores.".format(npc, ncores)
+        f"\rStarting bassPCA with {npc:d} components, using {ncores:d} cores."
     )
 
     return BassBasis(
-        xx, y, basis, newy, setup.y_mean, setup.y_sd, trunc_error, ncores, **kwargs
+        xx,
+        y,
+        basis,
+        newy,
+        setup.y_mean,
+        setup.y_sd,
+        trunc_error,
+        ncores,
+        **kwargs,
     )
